@@ -142,6 +142,12 @@ class OthelloEnv:
             reward = float(np.sign(just_moved_diff))      # +1 / -1 / 0
         return self.state(), reward, self.done, {"legal": legal}
 
+    def outcome_for_current_player(self):
+        #valid only when self.done is true.
+        #returns +1/-1/0 from the perspective of the player to move at this state
+        diff = int(self.board.sum())
+        return float(np.sign(diff))
+
     # ------------------------------------------------------- representations
     def state(self):
         """(2, n, n) float32 planes from the MOVER's perspective:
