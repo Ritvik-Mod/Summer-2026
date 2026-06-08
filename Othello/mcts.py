@@ -95,10 +95,18 @@ def expand(node, net):
     node.is_expanded = True
     return value.item()
 
-def run_mcts(env, net, num_sims, c_puct=1.0):
+def run_mcts(env, net, num_sims, c_puct=1.0, add_Noise=False, alpha=0.3, eps=0.25):
     root = Node(env.clone())
 
-    for _ in range(num_sims):
+    search(root, net) #expanding the root once before we add noise
+
+    if add_Noise and root.P:
+        actions = list(root.P.keys())
+        noise = np.random.dirichlet([alpha] * len(actions))
+        for a, n in zip(actions, noise):
+            root.P[a] = (1 - eps) * root.P[a] + eps * n
+
+    for _ in range(num_sims - 1):
         search(root, net)
     
     counts = root.N #counts is a dict action --> visit count
@@ -110,7 +118,7 @@ def run_mcts(env, net, num_sims, c_puct=1.0):
 
     return pi
 
-def play_game(player_fn_black, player_fn_white, n=6):
+def play_game(player_fn_black, player_fn_white, n=8):
     env = othello_env.OthelloEnv(n)
     while not env.done:
         legal = env.legal_actions()
@@ -135,7 +143,7 @@ def mcts_player(env, net, sims):
     pi = run_mcts(env, net, sims)
     return int(np.argmax(pi))
 
-def evaluate_vs_random(net, sims, games=20,n=6):
+def evaluate_vs_random(net, sims, games=20,n=8):
     mcts_wins = 0
     mcts_fun = lambda env : mcts_player(env,net,sims)
     rand_fn = lambda env : random_player(env)
