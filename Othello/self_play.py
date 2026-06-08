@@ -11,7 +11,7 @@ import network
 import mcts
 import numpy as np
 
-def play_one_selfplay_game(net, n=6, sims=25):
+def play_one_selfplay_game(net, n=8, sims=25):
     env = othello_env.OthelloEnv(n)
     trajectory = [] #triplet list (state, pi, player to move)
 
@@ -21,7 +21,7 @@ def play_one_selfplay_game(net, n=6, sims=25):
             env.step(env.PASS)
             continue
     
-        pi = mcts.run_mcts(env, net, sims) #running mcts to get the improved policy
+        pi = mcts.run_mcts(env, net, sims, add_Noise=True) #running mcts to get the improved policy
 
         state = env.state() # (2,n,n) from current player's pov
         trajectory.append((state,pi,env.to_move))
@@ -41,7 +41,7 @@ def play_one_selfplay_game(net, n=6, sims=25):
     
     return examples
 
-def generate_selfplay_data(net, num_games, n=6, sims=25):
+def generate_selfplay_data(net, num_games, n=8, sims=25):
     all_examples = []
     for g in range(num_games):
         all_examples.extend(play_one_selfplay_game(net, n, sims))
