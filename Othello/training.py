@@ -55,12 +55,4 @@ def train(num_iterations, games_per_iteration, epochs, resume_from=None, start_i
         torch.save({"iteration": iteration, "net": net.state_dict(), "optimizer": optimizer.state_dict(),}, f"checkpoint_iter{iteration}.pt")
 
 if __name__ == "__main__":
-    train(num_iterations=10, games_per_iteration=20, sims=25, epochs=4, n=6, batch_size=32)    for iteration in range(num_iterations):
-        examples = self_play.generate_selfplay_data(net, games_per_iteration, n, sims)
-        avg_loss = train_network(net, examples, optimizer, batch_size, epochs)
-        win_rate = mcts.evaluate_vs_random(net, sims, games=20, n=n)
-        print(f"Iteration: {iteration+1} Avg Loss: {avg_loss:.4f} Win Rate vs Random: {win_rate:.4f}")
-        torch.save({"iteration": iteration, "net": net.state_dict(), "optimizer": optimizer.state_dict(),}, f"checkpoint_iter{iteration}.pt")
-
-if __name__ == "__main__":
     train(num_iterations=10, games_per_iteration=20, sims=25, epochs=4, n=6, batch_size=32)
