@@ -66,6 +66,11 @@ class Othello_Net(nn.Module):
 
         return p, v
 
+def compute_loss(policy_logits, value, pi, z):
+    value_loss = (z - value).pow(2).mean()
+    policy_loss = -(pi * F.log_softmax(policy_logits, dim=1)).sum(dim=1).mean()
+    return value_loss + policy_loss
+
 #testing shapes and architecture
 """
 net = Othello_Net(n = 6)
@@ -75,65 +80,61 @@ print(f'policy_logits shape: {policy_logits.shape}') #expecting [32, 37]
 print(f'value shape: {value.shape}') #expecting [32, 1]
 """
 
-#testing if this overfits 1 state of othello - if yes means are arch is fine
+if __name__ == "__main__":
+    #testing if this overfits 1 state of othello - if yes means are arch is fine
 
-env = othello_env.OthelloEnv(6)
-net = Othello_Net(6)
-optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=1e-4)
-net.train()
+    env = othello_env.OthelloEnv(6)
+    net = Othello_Net(6)
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=1e-4)
+    net.train()
 
-state = env.reset()
-state_tensor = torch.FloatTensor(state) #(2,6,6)
-state_tensor = state_tensor.unsqueeze(0) #now (1,2,6,6)
+    state = env.reset()
+    state_tensor = torch.FloatTensor(state) #(2,6,6)
+    state_tensor = state_tensor.unsqueeze(0) #now (1,2,6,6)
 
-n = 6
-action_size = n*n + 1
+    n = 6
+    action_size = n*n + 1
 
-pi = torch.zeros(1, action_size) #target policy
-legal = env.legal_actions()
-pi[0, legal[0]] = 1.0 # / len(legal) # set probs for only legal actions (divided by legal.length to make sure the probs add up to 1)
-"""
-however rn we removed divide by len(legal) cause we wanted to make sure 
-the loss goes to 0 and overfits... but due to /len(legal), if say only 4 legal moves
-then the cross entropy loss will go to minimum of ln(4) which is abt 1.38... so it wont ever go to 0
-and we saw this when the first run gave this:
-step 0 loss 4.0909
-step 50 loss 1.4986
-step 100 loss 1.4177
-step 150 loss 1.4020
-step 200 loss 1.3959
-step 250 loss 1.3929
+    pi = torch.zeros(1, action_size) #target policy
+    legal = env.legal_actions()
+    pi[0, legal[0]] = 1.0 # / len(legal) # set probs for only legal actions (divided by legal.length to make sure the probs add up to 1)
+    """
+    however rn we removed divide by len(legal) cause we wanted to make sure 
+    the loss goes to 0 and overfits... but due to /len(legal), if say only 4 legal moves
+    then the cross entropy loss will go to minimum of ln(4) which is abt 1.38... so it wont ever go to 0
+    and we saw this when the first run gave this:
+    step 0 loss 4.0909
+    step 50 loss 1.4986
+    step 100 loss 1.4177
+    step 150 loss 1.4020
+    step 200 loss 1.3959
+    step 250 loss 1.3929
 
-the next run however gave this:
-step 0 loss 4.7532
-step 50 loss 0.1620
-step 100 loss 0.0470
-step 150 loss 0.0241
-step 200 loss 0.0151
-step 250 loss 0.0105
-"""
+    the next run however gave this:
+    step 0 loss 4.7532
+    step 50 loss 0.1620
+    step 100 loss 0.0470
+    step 150 loss 0.0241
+    step 200 loss 0.0151
+    step 250 loss 0.0105
+    """
 
-z = torch.tensor([[1.0]]) #fake value set
+    z = torch.tensor([[1.0]]) #fake value set
 
-state_tensor = state_tensor.repeat(8,1,1,1)
-pi = pi.repeat(8,1)
-z = z.repeat(8,1)
+    state_tensor = state_tensor.repeat(8,1,1,1)
+    pi = pi.repeat(8,1)
+    z = z.repeat(8,1)
 
-for step in range(300):
-    policy_logits, value = net(state_tensor)
+    for step in range(300):
+        policy_logits, value = net(state_tensor)
 
-    value_loss = (z - value).pow(2).mean()
-    policy_loss = -(pi * F.log_softmax(policy_logits, dim=1)).sum(dim=1).mean()
-    loss = value_loss + policy_loss
+        value_loss = (z - value).pow(2).mean()
+        policy_loss = -(pi * F.log_softmax(policy_logits, dim=1)).sum(dim=1).mean()
+        loss = value_loss + policy_loss
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-    if step % 50 == 0:
-        print(f"step {step} loss {loss.item():.4f}")
-
-def compute_loss(policy_logits, value, pi, z):
-    value_loss = (z - value).pow(2).mean()
-    policy_loss = -(pi * F.log_softmax(policy_logits, dim=1)).sum(dim=1).mean()
-    return value_loss + policy_loss
+        if step % 50 == 0:
+            print(f"step {step} loss {loss.item():.4f}")    
