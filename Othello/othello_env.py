@@ -30,7 +30,7 @@ DIRECTIONS = [(-1, -1), (-1, 0), (-1, 1),
 
 
 class OthelloEnv:
-    def __init__(self, n: int = 6):
+    def __init__(self, n: int = 8):
         assert n % 2 == 0 and n >= 4, "board size must be even and >= 4"
         self.n = n
         self.size = n * n          # number of board cells
@@ -141,7 +141,7 @@ class OthelloEnv:
             just_moved_diff = -mover_disc_diff
             reward = float(np.sign(just_moved_diff))      # +1 / -1 / 0
         return self.state(), reward, self.done, {"legal": legal}
-
+    
     def outcome_for_current_player(self):
         #valid only when self.done is true.
         #returns +1/-1/0 from the perspective of the player to move at this state
