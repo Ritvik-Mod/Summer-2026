@@ -31,25 +31,27 @@ import mcts
 
 # ============================ CONFIG -- edit here ===========================
 N         = 8
-SIMS      = 2000
+SIMS      = 1000
 AB_DEPTH  = 3
 
 # who plays each colour: "human", "model", or "alphabeta"
-BLACK_PLAYER = "human"
+BLACK_PLAYER = "model"
 WHITE_PLAYER = "model"
 
 # checkpoint file used by each side IF that side is "model".
 # set them to different files to watch one model play another.
-BLACK_CKPT = "checkpoint_iter10.pt"
-WHITE_CKPT = "checkpoint_iter12.pt"
+BLACK_CKPT = "checkpoint_iter102.pt"
+WHITE_CKPT = "checkpoint_iter104.pt"
 
 AUTO_PLAY      = True     # auto-advance agent moves (else press SPACE)
 MOVE_DELAY_MS  = 600      # pause between agent moves in auto mode
 SHOW_HINTS     = True     # show legal moves for humans (toggle in-game with H)
 
-FLIP_ANIM      = True     # animate disc flips one-by-one
-FLIP_STEP_MS   = 110      # delay between each disc flipping
-PLACE_HOLD_MS  = 280      # pause after placing a disc, before flips start
+FLIP_ANIM      = False     # animate disc flips one-by-one
+FLIP_STEP_MS   = 300      # delay between each disc flipping
+PLACE_HOLD_MS  = 350      # pause after placing a disc, before flips start
+
+AGENT_PASS_MS  = 700      # how long to show "<side> passes" before auto-passing
 # ===========================================================================
 
 BG       = (22, 26, 33)
@@ -106,7 +108,7 @@ def absolute_board(env):
     return env.board if env.to_move == 1 else -env.board
 
 
-def draw(screen, env, fonts, status, last_move, show_hints, anim):
+def draw(screen, env, fonts, status, last_move, show_hints, anim, pass_prompt=None):
     big, mid, small = fonts
     screen.fill(BG)
 
@@ -164,6 +166,21 @@ def draw(screen, env, fonts, status, last_move, show_hints, anim):
             if v == -1:
                 pygame.draw.circle(screen, IVORY_RIM, (cx, cy), rad, 2)
 
+    # centered overlay banner when a side has no legal move and must pass
+    if pass_prompt is not None:
+        line1, line2 = pass_prompt
+        panel_w, panel_h = int(N*CELL*0.78), 96
+        px = (W - panel_w) // 2
+        py = by + (N*CELL - panel_h) // 2
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((18, 22, 28, 232))
+        screen.blit(panel, (px, py))
+        pygame.draw.rect(screen, HINT, (px, py, panel_w, panel_h), 2, border_radius=10)
+        t1 = mid.render(line1, True, TEXT)
+        t2 = small.render(line2, True, HINT)
+        screen.blit(t1, (W//2 - t1.get_width()//2, py + 24))
+        screen.blit(t2, (W//2 - t2.get_width()//2, py + 58))
+
     pygame.display.flip()
 
 
@@ -202,6 +219,14 @@ def main():
     show_hints = SHOW_HINTS
     last_agent_time = 0
 
+    # pass-handling state:
+    #   pass_prompt holds the banner text while we wait/pace a forced pass.
+    #   pass_kind   is "human" (wait for input) or "agent" (timed auto-pass).
+    #   pass_since  is the tick the agent-pass banner appeared.
+    pass_prompt = None
+    pass_kind = None
+    pass_since = 0
+
     anim = None
     last_flip_time = 0
 
@@ -221,6 +246,9 @@ def main():
             return None
         r, c = divmod(a, N)
         flips = env._flips(env.board, r, c)
+        print(f"\n--- {'B' if env.to_move==1 else 'W'} plays ({r},{c}) ---")
+        print(env.render())
+        print(f"flips {len(flips)} disc(s): {flips}")
         pcolor = env.to_move
         if not FLIP_ANIM or not flips:
             env.step(a); last_move = a
@@ -258,18 +286,52 @@ def main():
         to_move_fn = players[env.to_move]
         is_human = to_move_fn is None
 
+        # ---- forced-pass handling (no legal move for side to move) ----
+        if pass_prompt is not None:
+            # a pass is pending; draw the banner and wait/pace before applying.
+            draw(screen, env, fonts, status(), last_move, show_hints, None, pass_prompt)
+            do_pass = False
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif pass_kind == "human" and event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                        do_pass = True
+                elif event.type == pygame.MOUSEBUTTONDOWN and pass_kind == "human":
+                    do_pass = True
+            if pass_kind == "agent" and now - pass_since >= AGENT_PASS_MS:
+                do_pass = True
+            if do_pass:
+                env.step(env.PASS); last_move = env.PASS
+                pass_prompt = pass_kind = None
+                last_agent_time = now   # pace the next agent move from here
+            clock.tick(60)
+            continue
+
         draw(screen, env, fonts, status(), last_move, show_hints, None)
 
+        # detect a forced pass and ARM the banner (instead of passing instantly)
         if not env.done and not env.legal_actions():
-            env.step(env.PASS); last_move = env.PASS
+            side = "Black" if env.to_move == 1 else "White"
+            if is_human:
+                pass_prompt = (f"No legal move for {side}.",
+                               "You must pass — press SPACE or click.")
+                pass_kind = "human"
+            else:
+                pass_prompt = (f"{side} has no legal move.", "Passing\u2026")
+                pass_kind = "agent"
+                pass_since = now
             continue
 
         if not env.done and not is_human:
             if auto and (now - last_agent_time) >= MOVE_DELAY_MS:
-                a = to_move_fn(env)
+                a = to_move_fn(env)               # MCTS think-time burns wall clock
                 anim = begin_move(a)
-                last_agent_time = now
-                last_flip_time = now
+                last_agent_time = pygame.time.get_ticks()
+                last_flip_time  = pygame.time.get_ticks()  # re-read AFTER thinking
+                                                            # so flip hold isn't pre-elapsed
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -279,13 +341,14 @@ def main():
                     running = False
                 elif event.key == pygame.K_r:
                     env = othello_env.OthelloEnv(N); last_move = None; anim = None
+                    pass_prompt = pass_kind = None
                 elif event.key == pygame.K_a:
                     auto = not auto
                 elif event.key == pygame.K_h:
                     show_hints = not show_hints
                 elif event.key == pygame.K_SPACE and not is_human and not env.done:
                     a = to_move_fn(env)
-                    anim = begin_move(a); last_flip_time = now
+                    anim = begin_move(a); last_flip_time = pygame.time.get_ticks()
             elif event.type == pygame.MOUSEBUTTONDOWN and is_human and not env.done:
                 a = cell_at(event.pos)
                 if a is not None and a in env.legal_actions():
