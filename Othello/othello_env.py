@@ -17,8 +17,17 @@ The contract (everything MCTS / the network will call):
     perspective, so "the player to move always sees +1 = me" stays invariant.
   - outcome is reported from the perspective of the player who just moved.
 
-The flip/legal rules themselves are identical to game.py, only re-expressed
-to be board size parametric and perspective based.
+PERFORMANCE NOTE (added after profiling):
+  cProfile on batched self-play showed _flips() at 25.7M calls / 44% of total
+  runtime — every legal_actions() call looped all empty cells and ran the
+  Python ray-walk per cell. legal_actions()/legal_mask() now use a vectorized
+  numpy ray-scan (_legal_grid) that computes legality for ALL cells at once
+  in ~8 directions x <=n-2 shifted-array ops, instead of n*n Python _flips
+  calls. _flips() itself is kept (unchanged) for applying the one move that
+  is actually played, and as the reference implementation for verification.
+
+  Run `python othello_env.py` to verify the vectorized path against the
+  original slow path over random games.
 """
 
 from __future__ import annotations
@@ -63,7 +72,9 @@ class OthelloEnv:
     # ------------------------------------------------------ flip / legality
     def _flips(self, board, r, c):
         """Discs flipped if the MOVER (+1) plays (r,c). [] => illegal.
-        Identical rule to game.py.discs_to_flip, but perspective-based."""
+        Identical rule to game.py.discs_to_flip, but perspective-based.
+        Kept as-is: used to APPLY the single move actually played, and as the
+        reference implementation the vectorized path is verified against."""
         n = self.n
         if board[r, c] != 0:
             return []
@@ -78,8 +89,40 @@ class OthelloEnv:
                 out.extend(line)
         return out
 
-    def legal_actions(self, board=None):
-        """List of legal action indices for the MOVER. Empty => must PASS."""
+    # ---- vectorized legality ----
+    def _sh(self, m, dr, dc):
+        """Shifted view: out[r, c] = m[r+dr, c+dc], zero/False outside bounds."""
+        n = self.n
+        out = np.zeros_like(m)
+        r0, r1 = max(-dr, 0), min(n - dr, n)
+        c0, c1 = max(-dc, 0), min(n - dc, n)
+        if r0 < r1 and c0 < c1:
+            out[r0:r1, c0:c1] = m[r0 + dr:r1 + dr, c0 + dc:c1 + dc]
+        return out
+
+    def _legal_grid(self, board):
+        """(n, n) bool grid of legal moves for the MOVER (+1), computed for
+        all cells at once. A cell is legal iff it is empty and, in some
+        direction, a contiguous run of opponent discs is terminated by one
+        of my discs. `cur` tracks cells whose ray is 'still alive' (all opp
+        so far) at distance k; legality fires when distance k holds my disc."""
+        empty = board == 0
+        opp   = board == -1
+        mine  = board == 1
+        legal = np.zeros_like(empty)
+        n = self.n
+        for dr, dc in DIRECTIONS:
+            cur = empty & self._sh(opp, dr, dc)      # opp disc at distance 1
+            k = 2
+            while k < n and cur.any():
+                legal |= cur & self._sh(mine, k * dr, k * dc)
+                cur   &= self._sh(opp,  k * dr, k * dc)
+                k += 1
+        return legal
+
+    def _legal_actions_slow(self, board=None):
+        """Original O(n^2) Python implementation. Reference for verification
+        only — not used in the hot path."""
         b = self.board if board is None else board
         n = self.n
         acts = []
@@ -89,13 +132,18 @@ class OthelloEnv:
                     acts.append(r * n + c)
         return acts
 
+    def legal_actions(self, board=None):
+        """List of legal action indices for the MOVER. Empty => must PASS."""
+        b = self.board if board is None else board
+        return [int(a) for a in np.flatnonzero(self._legal_grid(b))]
+
     def legal_mask(self, board=None):
         """Boolean vector length action_size. If no moves, only PASS is legal."""
         b = self.board if board is None else board
         mask = np.zeros(self.action_size, dtype=bool)
-        acts = self.legal_actions(b)
-        if acts:
-            mask[acts] = True
+        grid = self._legal_grid(b)
+        if grid.any():
+            mask[:self.size] = grid.reshape(-1)
         else:
             mask[self.PASS] = True
         return mask
@@ -129,9 +177,9 @@ class OthelloEnv:
         self.to_move = -self.to_move
 
         # terminal: two passes in a row, or board full, or neither side can move
-        if self.consecutive_passes >= 2 or np.count_nonzero(self.board == 0) == 0:
+        if self.consecutive_passes >= 2 or not (self.board == 0).any():
             self.done = True
-        elif not self.legal_actions() and not self.legal_actions(board=-self.board):
+        elif not self._legal_grid(self.board).any() and not self._legal_grid(-self.board).any():
             self.done = True
 
         reward = 0.0
@@ -141,7 +189,7 @@ class OthelloEnv:
             just_moved_diff = -mover_disc_diff
             reward = float(np.sign(just_moved_diff))      # +1 / -1 / 0
         return self.state(), reward, self.done, {"legal": legal}
-    
+
     def outcome_for_current_player(self):
         #valid only when self.done is true.
         #returns +1/-1/0 from the perspective of the player to move at this state
@@ -174,3 +222,30 @@ class OthelloEnv:
         b = int((absb == 1).sum()); w = int((absb == -1).sum())
         side = "X(black)" if self.to_move == 1 else "O(white)"
         return "\n".join(rows) + f"\n   X={b} O={w}  to move: {side}"
+
+
+if __name__ == "__main__":
+    # Verification: vectorized legal_actions must agree with the original
+    # Python implementation at EVERY position of random games.
+    import random
+
+    for n in (6, 8):
+        positions = 0
+        for g in range(150):
+            env = OthelloEnv(n)
+            while not env.done:
+                fast = env.legal_actions()
+                slow = env._legal_actions_slow()
+                assert fast == slow, (
+                    f"MISMATCH n={n} game={g}\n{env.render()}\n"
+                    f"fast={fast}\nslow={slow}"
+                )
+                # also check the mask agrees
+                mask = env.legal_mask()
+                if fast:
+                    assert list(np.flatnonzero(mask)) == fast
+                else:
+                    assert mask[env.PASS] and mask.sum() == 1
+                positions += 1
+                env.step(random.choice(fast) if fast else env.PASS)
+        print(f"n={n}: vectorized legality verified on {positions} positions  PASSED")
